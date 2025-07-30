@@ -1,0 +1,140 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Data files (large files that shouldn't be in git)
+*.vcf
+*.vcf.gz
+*.vcf.gz.tbi
+*.vcf.gz.csi
+*.bcf
+*.bcf.gz
+*.bcf.gz.csi
+*.bam
+*.bam.bai
+*.sam
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.fa
+*.fa.gz
+*.fasta
+*.fasta.gz
+*.gtf
+*.gff
+*.gff3
+*.bed
+*.bed.gz
+*.txt.gz
+*.csv.gz
+*.tsv.gz
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Output files
+output/
+results/
+*.predicted_expression
+*.model_summary
+*.log
+*.model_snps.loaded.vcf.gz
+*.model_snps.missing
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Environment files
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# R files (if any R scripts are used)
+.Rhistory
+.RData
+.Ruserdata
+
+# Large data directories
+data/
+raw_data/
+processed_data/
+
+# Backup files
+*.bak
+*.backup
+
+# Compressed files
+*.zip
+*.tar.gz
+*.tar.bz2
+*.rar
+
+# Specific to this project
+# VCF files and indexes
+*.vcf.gz
+*.vcf.gz.tbi
+*.vcf.gz.csi
+
+# Model database files (these can be large)
+*.with_snp_id.db
+
+# Prediction outputs
+*.predicted_expression
+*.model_summary
+*.model_snps.*
+
+# Jupyter notebook outputs
+.ipynb_checkpoints/ 
