@@ -15,6 +15,7 @@
 
 '''
 Example call
+1. To run a few genes from a list
 database=/data100t1/home/wanying/BioVU/202505_hypophosphatasia/data/harmonized_predixcan_db/JTI_Whole_Blood.with_snp_id.db
 
 python /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/predict_gene_enpression.py \
@@ -22,12 +23,39 @@ python /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/predi
 --model_db_snp_key snp_id_GRch38 \
 --vcf_genotypes /data100t1/share/BioVU/agd_250k/vcf-converted/agd250k_chr1.primary_pass.vcf.gz \
 --output_path /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/output \
---output_prefix output \
+--output_prefix output.selected_gene_from_list \
 --only_entries ENSG00000001629 ENSG00000162551 ENSG00000001460 \
---overwrite
+--overwrite \
+--save_vcf \
+--verbose
 
 # Add --chr_in_vcf if chr is included in the VCF #CHR column
 # To run one or few genes: --only_entries ENSG00000162551
+
+2. To run a few genes provided as a file
+database=/data100t1/home/wanying/BioVU/202505_hypophosphatasia/data/harmonized_predixcan_db/JTI_Whole_Blood.with_snp_id.db
+
+python /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/predict_gene_enpression.py \
+--model_db_path ${database} \
+--model_db_snp_key snp_id_GRch38 \
+--vcf_genotypes /data100t1/share/BioVU/agd_250k/vcf-converted/agd250k_chr1.primary_pass.vcf.gz \
+--output_path /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/output \
+--output_prefix output.selected_genes_from_file \
+--only_entries_fn /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/example_file/selected_gene_list.txt \
+--overwrite
+
+
+3. To run all genes of a given chromosome (eg. chr1)
+database=/data100t1/home/wanying/BioVU/202505_hypophosphatasia/data/harmonized_predixcan_db/JTI_Whole_Blood.with_snp_id.db
+ref_file=/data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/data/gene_chr_reference.chr1.txt
+python /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/predict_gene_enpression.py \
+--model_db_path ${database} \
+--model_db_snp_key snp_id_GRch38 \
+--vcf_genotypes /data100t1/share/BioVU/agd_250k/vcf-converted/agd250k_chr1.primary_pass.vcf.gz \
+--output_path /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/output \
+--output_prefix output.selected_genes_from_file \
+--only_entries_fn <(awk 'NR>1 {print $1}' ${ref_file}) \
+--overwrite
 '''
 
 import pandas as pd
@@ -39,6 +67,7 @@ import sys
 import time
 import sqlite3
 import subprocess
+import gzip
 
 def setup_log(fn_log, mode='w'):
     '''
@@ -66,6 +95,7 @@ def record_args(args):
     for arg in vars(args):
         msg = f'# - {arg}: {getattr(args, arg)}'
         logging.info(msg)
+    logging.info('')
         
 def add_arguments():
     '''
@@ -97,6 +127,10 @@ def add_arguments():
                         help="Compute only these entries in the models. Provide in a file, with one genes ensembl ID per row and no header line")
     parser.add_argument("--overwrite", action='store_true',
                         help="Overwrite existing files if True")
+    parser.add_argument("--save_vcf", action='store_true',
+                        help="Save vcf of loaded SNPs (model_snps.loaded.vcf.gz), and a list of missing SNPs (model_snps.missing) (Do not recommand if predicting all or many genes)")                 
+    parser.add_argument("--verbose", action='store_true',
+                        help='Print out prediction status of each gene')
     args = parser.parse_args()
     # args, unknown = parser.parse_known_args()
     
@@ -191,7 +225,8 @@ def genotype2number(val, na_rep='NA', flip=False):
     else:
         return 2-dict_gt_conversion[val] 
 
-def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf, model_snps_output_prefix):
+def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf,
+                  model_snps_output_prefix, save_vcf=False, verbose=False):
     '''
     Get the genotypes for the variants needed to predict the expression of a single gene.
     Tabix is used to complete the query, so variant's chromosome and position are needed
@@ -205,6 +240,8 @@ def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf, model_snps_o
     - vcf: gzip and tabix-indexed vcf. Assuming the values only contains genotype such as '0/1', '0|0'
            TODO: Need additional functionalities to parse values with multiple fields from VCF
     - model_snps_output_prefix: save dosage or genotype of loaded SNPs, and list of missing SNPs for future reference
+    - save_vcf: If true, save a vcf of loaded snps and a file of unfound snps
+    - verbose: print out snp loading status
     Return:
     - Save loaded genotypes to a vcf file and gzip
     - n_snps_used: number of SNPs loaded
@@ -215,14 +252,16 @@ def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf, model_snps_o
     n_snps_found, n_snps_not_found = 0, 0 # Number of SNPs found and not found
     lst_gt = [] # Genotype or dosage of all SNPs
     lst_snps = [] # Track which SNPs are loaded
-    # Output header lines to loaded_snp_vcf
-    loaded_snp_vcf = f'{model_snps_output_prefix}.model_snps.loaded.vcf'
-    cmd = f"{TABIX} -H {vcf} > {loaded_snp_vcf}"
-    cmd_run= subprocess.run(cmd, shell=True)
-    loaded_snp_fh = open(loaded_snp_vcf, 'a') # Keep adding more lines
 
-    # Also save SNPs that are not found
-    missing_snp_fh = open(f'{model_snps_output_prefix}.model_snps.missing', 'w')
+    if save_vcf:
+        # Output header lines to loaded_snp_vcf
+        loaded_snp_vcf = f'{model_snps_output_prefix}.model_snps.loaded.vcf'
+        cmd = f"{TABIX} -H {vcf} > {loaded_snp_vcf}"
+        cmd_run= subprocess.run(cmd, shell=True)
+        loaded_snp_fh = open(loaded_snp_vcf, 'a') # Keep adding more lines
+
+        # Also save SNPs that are not found
+        missing_snp_fh = open(f'{model_snps_output_prefix}.model_snps.missing', 'w')
 
     for i, chr_pos in enumerate(snp_chr_pos):
         '''
@@ -253,7 +292,8 @@ def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf, model_snps_o
             lst_results = result.split('\n')
             if len(lst_results)==1: # No SNPs found
                 n_snps_not_found += 1
-                missing_snp_fh.write(snps[i]+'\t'+chr_pos+'\n')
+                if save_vcf:
+                    missing_snp_fh.write(snps[i]+'\t'+chr_pos+'\n')
                 continue
 
             snp_loaded = False # Track if current SNP is loaded
@@ -299,26 +339,32 @@ def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf, model_snps_o
                 
                 if not snp_loaded: # If no match found
                     n_snps_not_found += 1
-                    missing_snp_fh.write(snps[i]+'\t'+chr_pos+'\n')
+                    if save_vcf:
+                        missing_snp_fh.write(snps[i]+'\t'+chr_pos+'\n')
                 else:
                     lst_snps.append(snps[i])
                     lst_gt.append(values)
-                    loaded_snp_fh.write(line+'\n')
-            print(f'\r# Load genotypes for variants in the model: {n_snps_found}/{n_total_snps}; {n_snps_not_found} SNPs not found',
-                  flush=True, end='')
-    print()
-    logging.info('# Load genotypes for variants in the model: %s/%s; %s SNPs not found' % (n_snps_found, n_total_snps, n_snps_not_found))
-    loaded_snp_fh.close()
-    missing_snp_fh.close()
+                    if save_vcf:
+                     loaded_snp_fh.write(line+'\n')
+            if verbose:
+                print(f'\r# Load genotypes for variants in the model: {n_snps_found}/{n_total_snps}; {n_snps_not_found} SNPs not found',
+                      flush=True, end='')
+    if verbose:
+        print()
+        logging.info('# Load genotypes for variants in the model: %s/%s; %s SNPs not found' % (n_snps_found, n_total_snps, n_snps_not_found))
+    if save_vcf:
+        loaded_snp_fh.close()
+        missing_snp_fh.close()
 
     # Get column headers to label loaded dataframe of genotypes
-    with open(loaded_snp_vcf) as fh:
+    with gzip.open(vcf, 'rt') as fh:
         for line in fh:
             if line[:2] != '##':
                 break
     headers = line.strip().split()[9:]
     # Compress loaded SNPs file, load into dataframe and return
-    subprocess.run(f'gzip {loaded_snp_vcf}', shell=True)
+    if save_vcf:
+        subprocess.run(f'gzip {loaded_snp_vcf}', shell=True)
     # df = pd.read_csv(f'{loaded_snp_vcf}.gz', compression='gzip', sep='\t', comment='#', header=None)
     # df.columns = headers
     # # Columns are #CHROM  POS     ID      REF     ALT     QUAL    FILTER  INFO    FORMAT  HG001_PrecFDA_H
@@ -383,7 +429,7 @@ def get_snp_chr_pos(snp_id_col, chr_in_vcf, df_weights):
     if len(snp_ids)==0: # If no SNPs in the model (should not happen)
         logging.info('# Warning: no SNPs in the model from .db file (which should not happen)')
     if 'chr' in snp_ids[0]:
-        logging.info("# String 'chr' is detected in the chromosome number. Make sure the format matches in the VCF file")
+        # logging.info("# String 'chr' is detected in the chromosome number. Make sure the format matches in the VCF file")
         if not chr_in_vcf:
             # Remove 'chr' if the vcf file does not have chr in the chromosome column
             snp_ids = [snp.split('chr')[-1] for snp in snp_ids]
@@ -398,7 +444,9 @@ def get_snp_chr_pos(snp_id_col, chr_in_vcf, df_weights):
     return [f"{snp.split(':')[0]}:{snp.split(':')[1]}-{snp.split(':')[1]}" for snp in snp_ids]
         
             
-def predict_a_single_gene(gene, snp_id_col, chr_in_vcf, vcf, model_snps_output_prefix, build, conn):
+def predict_a_single_gene(gene, snp_id_col, chr_in_vcf, vcf,
+                          model_snps_output_prefix, build, conn,
+                          save_vcf=False, verbose=False):
     '''
     Get the predicted expression of a single gene
     Params:
@@ -409,6 +457,10 @@ def predict_a_single_gene(gene, snp_id_col, chr_in_vcf, vcf, model_snps_output_p
     - model_snps_output_prefix: Prefix of file names. Save load SNPs and missing SNPs for reference
     - build: GRCh build (37 or 38)
     - conn: connection to the database
+    - save_vcf: If true, save tabix quaried results of loaded snps into a vcf and gzip.
+                Also keep a list of missing snps.
+                DO NOT turn this flag on if predicting many genes, otherwise may take up a lot of storage space.
+    - verbose: print out status of each gene
     Return
     - n_snps_used: number of SNPs loaded
     - expression: predicted expression of the given gene
@@ -430,7 +482,9 @@ def predict_a_single_gene(gene, snp_id_col, chr_in_vcf, vcf, model_snps_output_p
     n_snps_used, genotypes = get_genotypes(snps=snps, snp_chr_pos=snp_chr_pos,
                                            ref_alleles=lst_ref, alt_alleles=lst_alt,
                                            vcf=vcf,
-                                           model_snps_output_prefix=f'{model_snps_output_prefix}.{gene}')
+                                           model_snps_output_prefix=f'{model_snps_output_prefix}.{gene}',
+                                           save_vcf=save_vcf,
+                                           verbose=verbose)
    
     if len(genotypes)==0: # If no SNPs found at all
         return 0, None
@@ -477,7 +531,8 @@ if __name__=='__main__':
         exit()
     
     df_all_expressions = ''
-    for i, row in df_genes.iterrows():
+    total_n_genes, count = len(df_genes), 0
+    for i, (_, row) in enumerate(df_genes.iterrows()):
         cur_start_fime = time.time()
         
         # To match the output of predixcan
@@ -486,8 +541,8 @@ if __name__=='__main__':
         n_snps_in_model = row['n.snps.in.model']
         pred_perf_r2 = row['pred.perf.R2']
         pred_perf_pval = row['pred.perf.pval']
-
-        logging.info(f'\n# Predict {gene} ({gene_name})')
+        if args.verbose:
+            logging.info(f'\n# Predict {gene} ({gene_name})')
         # Calculate predicted expression
         n_snps_used, df_expressions = predict_a_single_gene(gene=gene,
                                                             snp_id_col=args.model_db_snp_key,
@@ -495,19 +550,29 @@ if __name__=='__main__':
                                                             vcf=args.vcf_genotypes,
                                                             model_snps_output_prefix = os.path.join(args.output_path, args.output_prefix),
                                                             build=args.build,
-                                                            conn=conn)
+                                                            conn=conn,
+                                                            save_vcf=args.save_vcf,
+                                                            verbose=args.verbose)
 
         if df_expressions is None:
             # Move to next if no SNPs for this gene is found
+            print(f'\r# Processed genes {i+1}/{total_n_genes}; {count} successful predictions', flush=True, end='')
             continue
 
         fh_model_summary.write(f'{gene}\t{gene_name}\t{n_snps_in_model}\t{n_snps_used}\t{pred_perf_r2}\t{pred_perf_pval}\n')
+        fh_model_summary.flush()
         # Combine with other genes
         if len(df_all_expressions)==0:
             df_all_expressions = df_expressions.copy()
         else:
             df_all_expressions[gene] = df_expressions[gene]
-        log_running_time(cur_start_fime)
+        count += 1
+        if args.verbose:
+            log_running_time(cur_start_fime)
+        else: # Trun if off when running verbose mode
+            print(f'\r# Processed genes {i+1}/{total_n_genes}; {count} successful predictions', flush=True, end='')
+    print()
+    logging.info('# Processed genes %s/%s; %s successful predictions' % (i+1, total_n_genes, count))
     
     # Write to output file
     logging.info('# Save predictions to output file')

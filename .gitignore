@@ -32,6 +32,7 @@ MANIFEST
 .vscode/
 
 # Data files (large files that shouldn't be in git)
+test/
 *.vcf
 *.vcf.gz
 *.vcf.gz.tbi
@@ -92,6 +93,8 @@ Thumbs.db
 # Logs
 *.log
 logs/
+code/bash_slurm/
+code/slurm_logs/
 
 # Environment files
 .env
