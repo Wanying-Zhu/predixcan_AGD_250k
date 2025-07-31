@@ -21,9 +21,9 @@ python /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/predi
 --model_db_path ${database} \
 --model_db_snp_key snp_id_GRch38 \
 --vcf_genotypes /data100t1/share/BioVU/agd_250k/vcf-converted/agd250k_chr1.primary_pass.vcf.gz \
---output_path test \
+--output_path /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/output \
 --output_prefix output \
---only_entries ENSG00000162551 \
+--only_entries ENSG00000001629 ENSG00000162551 ENSG00000001460 \
 --overwrite
 
 # Add --chr_in_vcf if chr is included in the VCF #CHR column
@@ -82,6 +82,9 @@ def add_arguments():
                         help="File name of the genotypes vcf to use. Must be tabix indexed with .tbi or .csi file in the same directory")
     parser.add_argument("--build", default=38, choices=[37,38],
                         help='GRCh build of the genotype VCF file, either 37 or 38')
+    # Eg. tabix (system tabix does not recognize .csi index), /usr/bin/tabix, /data100t1/home/wanying/miniforge3/envs/jupyter_env/bin/tabix
+    parser.add_argument("--tabix", type=str, default='/data100t1/home/wanying/miniforge3/envs/jupyter_env/bin/tabix', 
+                        help="The path to tabix")
     parser.add_argument("--chr_in_vcf", action='store_true',
                         help="If true, assuming the #CHROM (1st) column of the VCF contains string 'chr' (ie. chr1 rather than 1)")
     parser.add_argument("--output_path", default='./', type=str,
@@ -103,7 +106,7 @@ def add_arguments():
     log_fn = os.path.join(args.output_path, args.output_prefix+'.log')
     setup_log(log_fn)
     logging.info('# Load arguments and setup log file')
-
+    
     exit_flag = False
     if not args.model_db_path:
         logging.info('# Error: required argument missing: --model_db_path')
@@ -119,9 +122,13 @@ def add_arguments():
             logging.info('# Error: output file exists. Remove the files or use --overwrite ')
             exit_flag
         else:
-            # Remove existing file
-            subprocess.run(f"rm {os.path.join(args.output_path, args.output_prefix+'.*')}", shell=True)
-
+            # Remove existing file: (exclude the log file)
+            # - *.model_snps.missing
+            # - *.model_snps.loaded.vcf.gz (This is the on that will hold gzip, so it must be removed. Other files can be overwritten easily)
+            # - *.model_summary
+            for suffix in ['model_snps.missing', 'model_snps.loaded.vcf.gz']:
+                subprocess.run(f"rm {os.path.join(args.output_path, args.output_prefix+'.*.{suffix}')}", shell=True)
+            
     if exit_flag:
         logging.info('# Exit')
         exit()
@@ -192,14 +199,15 @@ def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf, model_snps_o
     but not available in the original JTI models.
     The code will compare ref and alt alleles, and change genotype (or dosage) to 2-origianl_value if need to flip
     Params:
-    - snps: an array of SNPs to iterate
-    - ref_alleles, alt_alleles: list of alt or ref allele (used to match SNPs)
+    - snps: an array of SNPs to look up (actual query will be based on chr and pos)
     - snp_chr_pos: array of chr:pos-pos to query vcf
+    - ref_alleles, alt_alleles: list of alt or ref allele (used to match SNPs)
     - vcf: gzip and tabix-indexed vcf. Assuming the values only contains genotype such as '0/1', '0|0'
            TODO: Need additional functionalities to parse values with multiple fields from VCF
     - model_snps_output_prefix: save dosage or genotype of loaded SNPs, and list of missing SNPs for future reference
     Return:
     - Save loaded genotypes to a vcf file and gzip
+    - n_snps_used: number of SNPs loaded
     - genotype: a dataframe with columns: snp_id, genotypes for each individual in the vcf
     '''
     # use tabix to query vcf file by position
@@ -209,7 +217,7 @@ def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf, model_snps_o
     lst_snps = [] # Track which SNPs are loaded
     # Output header lines to loaded_snp_vcf
     loaded_snp_vcf = f'{model_snps_output_prefix}.model_snps.loaded.vcf'
-    cmd = f"/usr/bin/tabix -H {vcf} > {loaded_snp_vcf}"
+    cmd = f"{TABIX} -H {vcf} > {loaded_snp_vcf}"
     cmd_run= subprocess.run(cmd, shell=True)
     loaded_snp_fh = open(loaded_snp_vcf, 'a') # Keep adding more lines
 
@@ -228,12 +236,13 @@ def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf, model_snps_o
 
         When using "whereis tabix", I found multiple locations of tabix (both works for this script):
         - /usr/bin/tabix
-        - /belowshare/vumcshare/data100t1/gapps/tabix
+        - /belowshare/vumcshare/data100t1/home/wanying/miniforge3/envs/jupyter_env/bin/tabix
+        - /belowshare/vumcshare/data100t1/gapps/tabix (old version, does not work)
         
         Therefore, /usr/bin/tabix is specified here to avoid confusions
         '''
         ref_allele, alt_allele = ref_alleles[i], alt_alleles[i]
-        cmd = f"/usr/bin/tabix {vcf} {chr_pos}"
+        cmd = f"{TABIX} {vcf} {chr_pos}"
         cmd_run= subprocess.run(cmd, shell=True, text=True, capture_output=True)
         result = cmd_run.stdout
         err_msg = cmd_run.stderr # Capture any error message from terminal
@@ -244,7 +253,7 @@ def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf, model_snps_o
             lst_results = result.split('\n')
             if len(lst_results)==1: # No SNPs found
                 n_snps_not_found += 1
-                missing_snp_fh.write(snps[i]+'\n')
+                missing_snp_fh.write(snps[i]+'\t'+chr_pos+'\n')
                 continue
 
             snp_loaded = False # Track if current SNP is loaded
@@ -285,10 +294,12 @@ def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf, model_snps_o
                         logging.info('# Exit')
                         exit()
                 else:
+                    # Reach end of the line, so nothing
                     continue
                 
                 if not snp_loaded: # If no match found
-                    missing_snp_fh.write(snps[i]+'\n')
+                    n_snps_not_found += 1
+                    missing_snp_fh.write(snps[i]+'\t'+chr_pos+'\n')
                 else:
                     lst_snps.append(snps[i])
                     lst_gt.append(values)
@@ -313,7 +324,7 @@ def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf, model_snps_o
     # # Columns are #CHROM  POS     ID      REF     ALT     QUAL    FILTER  INFO    FORMAT  HG001_PrecFDA_H
     # return df.drop(columns=['#CHROM', 'POS', 'REF', 'ALT', 'QUAL', 'FILTER', 'INFO', 'FORMAT'])
     df_gt = pd.DataFrame(lst_gt, columns=headers, index=lst_snps)
-    return(df_gt)
+    return n_snps_found, df_gt
     
 def get_weights(gene, conn):
     '''
@@ -399,13 +410,14 @@ def predict_a_single_gene(gene, snp_id_col, chr_in_vcf, vcf, model_snps_output_p
     - build: GRCh build (37 or 38)
     - conn: connection to the database
     Return
+    - n_snps_used: number of SNPs loaded
     - expression: predicted expression of the given gene
     '''
     # Load weights
     df_weights = get_weights(gene=gene, conn=conn)
     if len(df_weights)==0:
         # Gene not found
-        return None
+        return 0, None
 
     # Need these columns from the weight dataframe
     cols = [snp_id_col, 'ref_allele', 'eff_allele', 'weight']
@@ -415,22 +427,26 @@ def predict_a_single_gene(gene, snp_id_col, chr_in_vcf, vcf, model_snps_output_p
     # Get an array of SNP chromosome and position (chr:pos-pos) to query VCF for genotype
     snp_chr_pos = get_snp_chr_pos(snp_id_col=snp_id_col, chr_in_vcf=chr_in_vcf, df_weights=df_weights)
 
-    genotypes = get_genotypes(snps=snps, snp_chr_pos=snp_chr_pos, 
-                              ref_alleles=lst_ref, alt_alleles=lst_alt,
-                              vcf=vcf,
-                              model_snps_output_prefix=model_snps_output_prefix)
+    n_snps_used, genotypes = get_genotypes(snps=snps, snp_chr_pos=snp_chr_pos,
+                                           ref_alleles=lst_ref, alt_alleles=lst_alt,
+                                           vcf=vcf,
+                                           model_snps_output_prefix=f'{model_snps_output_prefix}.{gene}')
+   
+    if len(genotypes)==0: # If no SNPs found at all
+        return 0, None
     weights = df_weights.set_index(keys=snp_id_col).reindex(genotypes.index)['weight'].values
     expressions = np.matmul(weights, genotypes.values)
     sample_ids = genotypes.columns
-    return pd.DataFrame({'sample_id':sample_ids, gene:expressions})
+    return n_snps_used, pd.DataFrame({'sample_id':sample_ids, gene:expressions})
     
-
 if __name__=='__main__':
     # Load arguments from the terminal
     args = add_arguments()
+    TABIX = args.tabix # Set the global tabix (system tabix does not recognize .csi index file)
     outout_fn = os.path.join(args.output_path, args.output_prefix+'.predicted_expression')
-    model_summary_fn = os.path.join(args.output_path, args.output_prefix+'.model_summary') # Save model info
-    
+    model_summary_fn = os.path.join(args.output_path, args.output_prefix+'.model_summary') # Save model info (same as predixcan)
+    fh_model_summary = open(model_summary_fn, 'w')
+    fh_model_summary.write('gene\tgene_name\tn_snps_in_model\tn_snps_used\tpred_perf_r2\tpred_perf_pval\n')
     # Record the start time
     start_time = time.time()
     
@@ -440,7 +456,7 @@ if __name__=='__main__':
     cur = conn.cursor()
     cmd = f"SELECT * FROM extra"
     df_genes = pd.read_sql_query(sql=cmd, con=conn)
-
+    # print(df_genes.head(10))
     # Load selected genes from file or list provided
     if args.only_entries_fn is not None:
         lst_selected_genes = []
@@ -459,10 +475,11 @@ if __name__=='__main__':
         log_running_time(start_time=start_time)
         logging.info('# Exit')
         exit()
-
+    
+    df_all_expressions = ''
     for i, row in df_genes.iterrows():
         cur_start_fime = time.time()
-
+        
         # To match the output of predixcan
         gene = row['gene']
         gene_name = row['genename']
@@ -472,23 +489,31 @@ if __name__=='__main__':
 
         logging.info(f'\n# Predict {gene} ({gene_name})')
         # Calculate predicted expression
-        df_expressions = predict_a_single_gene(gene=gene,
-                                               snp_id_col=args.model_db_snp_key,
-                                               chr_in_vcf=args.chr_in_vcf,
-                                               vcf=args.vcf_genotypes,
-                                               model_snps_output_prefix = os.path.join(args.output_path, args.output_prefix),
-                                               build=args.build,
-                                               conn=conn)
-        
+        n_snps_used, df_expressions = predict_a_single_gene(gene=gene,
+                                                            snp_id_col=args.model_db_snp_key,
+                                                            chr_in_vcf=args.chr_in_vcf,
+                                                            vcf=args.vcf_genotypes,
+                                                            model_snps_output_prefix = os.path.join(args.output_path, args.output_prefix),
+                                                            build=args.build,
+                                                            conn=conn)
+
+        if df_expressions is None:
+            # Move to next if no SNPs for this gene is found
+            continue
+
+        fh_model_summary.write(f'{gene}\t{gene_name}\t{n_snps_in_model}\t{n_snps_used}\t{pred_perf_r2}\t{pred_perf_pval}\n')
         # Combine with other genes
-        if i==0:
+        if len(df_all_expressions)==0:
             df_all_expressions = df_expressions.copy()
         else:
             df_all_expressions[gene] = df_expressions[gene]
         log_running_time(cur_start_fime)
+    
     # Write to output file
     logging.info('# Save predictions to output file')
-    df_all_expressions.to_csv(outout_fn, sep='\t', index=False)
+    if len(df_all_expressions) != 0:
+        df_all_expressions.to_csv(outout_fn, sep='\t', index=False)
+    fh_model_summary.close()
     cur.close()
     
     # Calculate the time elapsed

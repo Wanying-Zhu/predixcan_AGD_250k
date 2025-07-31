@@ -1,0 +1,1 @@
+1. ./data: contains reference file of gene chromosome number
