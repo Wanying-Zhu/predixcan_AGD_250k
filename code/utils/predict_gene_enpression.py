@@ -151,9 +151,9 @@ def add_arguments():
 
     output_fn = os.path.join(args.output_path, args.output_prefix+'.txt')
     output_summary_fn = os.path.join(args.output_path, args.output_prefix+'.summary.txt')
-    if os.path.isfile(log_fn):
+    if os.path.isfile(log_fn) and os.path.isfile(output_fn):
         if not args.overwrite:
-            logging.info('# Error: output file exists. Remove the files or use --overwrite ')
+            logging.info('# Error: output files exist. Remove the files or use --overwrite ')
             exit_flag
         else:
             # Remove existing file: (exclude the log file)
@@ -285,10 +285,17 @@ def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf,
         cmd_run= subprocess.run(cmd, shell=True, text=True, capture_output=True)
         result = cmd_run.stdout
         err_msg = cmd_run.stderr # Capture any error message from terminal
-        # Log error or process genotype
-        if len(err_msg)>0:
+
+        if chr_pos==-1: # SNP not found: SNP does not have valid chr:pos (None value) in the .db file
+            n_snps_not_found += 1
+            if save_vcf:
+                missing_snp_fh.write(snps[i]+'\t'+chr_pos+'\n')
+        elif len(err_msg)>0: # SNP not found: Log error
+            n_snps_not_found += 1
             logging.info('# Error loading genotype: %s' % err_msg)
-        else: # Porcess genotype into numbers
+            if save_vcf:
+                missing_snp_fh.write(snps[i]+'\t'+chr_pos+'\n')
+        else: # SNP found: Porcess genotype into numbers
             lst_results = result.split('\n')
             if len(lst_results)==1: # No SNPs found
                 n_snps_not_found += 1
@@ -425,14 +432,18 @@ def get_snp_chr_pos(snp_id_col, chr_in_vcf, df_weights):
     else:
         snp_ids = df_weights[snp_id_col].values
 
+    # Some rsids do not have valid chr:pos in the new database, they need special care (label as -1)
+    snp_ids = [snp if snp is not None else -1 for snp in snp_ids]
+    
     # Check if string 'str' is in the SNP id and vcf
     if len(snp_ids)==0: # If no SNPs in the model (should not happen)
         logging.info('# Warning: no SNPs in the model from .db file (which should not happen)')
-    if 'chr' in snp_ids[0]:
+    elif 'chr' in snp_ids[0]:
         # logging.info("# String 'chr' is detected in the chromosome number. Make sure the format matches in the VCF file")
         if not chr_in_vcf:
             # Remove 'chr' if the vcf file does not have chr in the chromosome column
-            snp_ids = [snp.split('chr')[-1] for snp in snp_ids]
+            # Some rsids do not have valid chr:pos in the new database, they need special care (label as -1)
+            snp_ids = [snp.split('chr')[-1] if snp!=-1 else -1 for snp in snp_ids]
     else:
         # Add chr to snp list if needed
         logging.info("# String 'chr' is not in the chromosome number. Make sure the format matches in the VCF file")
@@ -441,7 +452,7 @@ def get_snp_chr_pos(snp_id_col, chr_in_vcf, df_weights):
 
     # Return chr:pos-pos to query vcf
     # Original ID format is chr1:20633561:C:T
-    return [f"{snp.split(':')[0]}:{snp.split(':')[1]}-{snp.split(':')[1]}" for snp in snp_ids]
+    return [f"{snp.split(':')[0]}:{snp.split(':')[1]}-{snp.split(':')[1]}" if snp!=-1 else -1 for snp in snp_ids]
         
             
 def predict_a_single_gene(gene, snp_id_col, chr_in_vcf, vcf,
