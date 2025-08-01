@@ -14,48 +14,13 @@
 # /data100t1/home/wanying/BioVU/202505_hypophosphatasia/data/harmonized_predixcan_db/*.with_snp_id.db
 
 '''
-Example call
-1. To run a few genes from a list
-database=/data100t1/home/wanying/BioVU/202505_hypophosphatasia/data/harmonized_predixcan_db/JTI_Whole_Blood.with_snp_id.db
-
-python /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/predict_gene_enpression.py \
---model_db_path ${database} \
---model_db_snp_key snp_id_GRch38 \
---vcf_genotypes /data100t1/share/BioVU/agd_250k/vcf-converted/agd250k_chr1.primary_pass.vcf.gz \
---output_path /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/output \
---output_prefix output.selected_gene_from_list \
---only_entries ENSG00000001629 ENSG00000162551 ENSG00000001460 \
---overwrite \
---save_vcf \
---verbose
-
-# Add --chr_in_vcf if chr is included in the VCF #CHR column
-# To run one or few genes: --only_entries ENSG00000162551
-
-2. To run a few genes provided as a file
-database=/data100t1/home/wanying/BioVU/202505_hypophosphatasia/data/harmonized_predixcan_db/JTI_Whole_Blood.with_snp_id.db
-
-python /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/predict_gene_enpression.py \
---model_db_path ${database} \
---model_db_snp_key snp_id_GRch38 \
---vcf_genotypes /data100t1/share/BioVU/agd_250k/vcf-converted/agd250k_chr1.primary_pass.vcf.gz \
---output_path /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/output \
---output_prefix output.selected_genes_from_file \
---only_entries_fn /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/example_file/selected_gene_list.txt \
---overwrite
-
-
-3. To run all genes of a given chromosome (eg. chr1)
-database=/data100t1/home/wanying/BioVU/202505_hypophosphatasia/data/harmonized_predixcan_db/JTI_Whole_Blood.with_snp_id.db
-ref_file=/data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/data/gene_chr_reference.chr1.txt
-python /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/predict_gene_enpression.py \
---model_db_path ${database} \
---model_db_snp_key snp_id_GRch38 \
---vcf_genotypes /data100t1/share/BioVU/agd_250k/vcf-converted/agd250k_chr1.primary_pass.vcf.gz \
---output_path /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/output \
---output_prefix output.selected_genes_from_file \
---only_entries_fn <(awk 'NR>1 {print $1}' ${ref_file}) \
---overwrite
+python /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/code/utils/debug_predict_gene_enpression.py \
+    --model_db_path /data100t1/home/wanying/BioVU/202505_hypophosphatasia/data/harmonized_predixcan_db/JTI_Ovary.with_snp_id.db \
+    --model_db_snp_key snp_id_GRch38 \
+    --vcf_genotypes /data100t1/share/BioVU/agd_250k/vcf-converted/agd250k_chr8.primary_pass.vcf.gz \
+    --output_path /data100t1/home/wanying/BioVU/20250724_predixan_AGD_250k/output/ \
+    --output_prefix jti_expression.chr8.Ovary \
+    --only_entries ENSG00000036448 --overwrite --verbose
 '''
 
 import pandas as pd
@@ -280,19 +245,17 @@ def get_genotypes(snps, snp_chr_pos, ref_alleles, alt_alleles, vcf,
         
         Therefore, /usr/bin/tabix is specified here to avoid confusions
         '''
-        if chr_pos==-1: # SNP not found: SNP does not have valid chr:pos (None value) in the .db file
-            n_snps_not_found += 1
-            if save_vcf:
-                missing_snp_fh.write(snps[i]+'\t'+chr_pos+'\n')
-            continue
-                
         ref_allele, alt_allele = ref_alleles[i], alt_alleles[i]
         cmd = f"{TABIX} {vcf} {chr_pos}"
         cmd_run= subprocess.run(cmd, shell=True, text=True, capture_output=True)
         result = cmd_run.stdout
         err_msg = cmd_run.stderr # Capture any error message from terminal
 
-        if len(err_msg)>0: # SNP not found: Log error
+        if chr_pos==-1: # SNP not found: SNP does not have valid chr:pos (None value) in the .db file
+            n_snps_not_found += 1
+            if save_vcf:
+                missing_snp_fh.write(snps[i]+'\t'+chr_pos+'\n')
+        elif len(err_msg)>0: # SNP not found: Log error
             n_snps_not_found += 1
             logging.info('# Error loading genotype: %s' % err_msg)
             if save_vcf:
